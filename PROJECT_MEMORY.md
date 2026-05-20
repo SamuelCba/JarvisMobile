@@ -1,30 +1,33 @@
 # JarvisMobile Project Memory
 
-JarvisMobile is a new Flutter app project created from Termux.
+JarvisMobile is a native Android/Kotlin app project created from Termux.
 
 ## Working rule
 
 - Open Codex from this folder when continuing work:
   `/data/data/com.termux/files/home/JarvisMobile`
-- Treat this as a Flutter mobile app project.
-- Do not rely on local Flutter/Dart in Termux for builds. Prior projects in this device hit:
-  `dart: cannot execute: required file not found`
+- Treat this as a native Android/Kotlin mobile app project.
+- Do not rely on local Android/Flutter tooling in Termux for builds.
 - Use GitHub Actions as the real Android build environment.
+- The product direction is a Jarvis/Voice Access style assistant:
+  voice input, command parsing, app launching, AccessibilityService automation,
+  and later learned routines.
 
 ## Build workflow
 
 1. Keep source code in the repo:
-   - `pubspec.yaml`
-   - `lib/main.dart`
-   - `.github/workflows/flutter-android.yml`
-2. In GitHub Actions, generate the Android project files:
-   - `flutter create --platforms=android .`
-   - `rm -rf test`
-   - `flutter pub get`
-   - `flutter analyze`
-   - `flutter build apk --release`
+   - `settings.gradle.kts`
+   - `build.gradle.kts`
+   - `app/build.gradle.kts`
+   - `app/src/main/...`
+   - `.github/workflows/android-kotlin.yml`
+2. In GitHub Actions:
+   - set up Java 17
+   - set up Android SDK
+   - set up Gradle
+   - run `gradle assembleDebug`
 3. Upload this artifact:
-   - `build/app/outputs/flutter-apk/app-release.apk`
+   - `app/build/outputs/apk/debug/app-debug.apk`
 4. If CI fails, inspect the failed logs first:
    - `gh run view <run_id> --log-failed`
 
@@ -33,20 +36,19 @@ JarvisMobile is a new Flutter app project created from Termux.
 - GitHub CLI is authenticated as `SamuelCba`.
 - The token already has `workflow` scope.
 - Expected repo name: `JarvisMobile`
-- Expected remote creation command:
-  `gh repo create JarvisMobile --public --source=. --remote=origin --push`
+- Remote: `https://github.com/SamuelCba/JarvisMobile.git`
 
 ## APK delivery pattern
 
 - Download Actions artifacts into:
   `/data/data/com.termux/files/usr/tmp/JarvisMobile/`
 - Copy final APK into shared storage:
-  `/storage/emulated/0/Documents/JarvisMobile/app-release.apk`
+  `/storage/emulated/0/Documents/JarvisMobile/app-debug.apk`
 - If ADB install is requested:
   - run `adb devices`
-  - run `adb install -r /storage/emulated/0/Documents/JarvisMobile/app-release.apk`
+  - run `adb install -r /storage/emulated/0/Documents/JarvisMobile/app-debug.apk`
   - if `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, ask before uninstalling the previous package.
 
 ## Current intent
 
-The user wants JarvisMobile to be a Flutter app and wants this folder to carry enough memory so a new Codex session opened here knows to create/push the repo and use GitHub Actions for builds.
+The user decided the real MVP should be Kotlin native, because AccessibilityService and voice/system automation matter more than Flutter UI for this project.

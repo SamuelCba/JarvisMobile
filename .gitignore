@@ -1,18 +1,6 @@
-.dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-.packages
-.pub-cache/
-.pub/
+.gradle/
 build/
-coverage/
-
-android/
-ios/
-linux/
-macos/
-web/
-windows/
+app/build/
 
 *.iml
 .idea/
@@ -22,3 +10,4 @@ windows/
 *.aab
 *.keystore
 key.properties
+local.properties
