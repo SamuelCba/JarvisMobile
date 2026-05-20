@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -26,6 +27,7 @@ import com.samuelcba.jarvismobile.accessibility.JarvisAccessibilityService
 import com.samuelcba.jarvismobile.agent.CommandIntent
 import com.samuelcba.jarvismobile.agent.CommandParser
 import com.samuelcba.jarvismobile.memory.CommandMemory
+import java.io.File
 import java.util.Locale
 
 class MainActivity : Activity() {
@@ -35,6 +37,7 @@ class MainActivity : Activity() {
     private lateinit var logText: TextView
     private lateinit var commandInput: EditText
     private var speechRecognizer: SpeechRecognizer? = null
+    private var pendingFileRequest: PendingFileRequest? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,6 +46,7 @@ class MainActivity : Activity() {
         updateStatus()
         appendLog("Sistema listo. Prueba: \"abre YouTube\", \"abre Chrome\" o \"abre ajustes\".")
         appendLog("Tambien puedes usar: atras, inicio, baja pantalla, sube volumen, sube brillo, toca buscar.")
+        appendLog("Archivos: prueba \"crea una carpeta llamada prueba\" o \"crea un archivo llamado nota.txt en documentos\".")
         memory.recentCommands().forEach { appendLog("Memoria: $it") }
     }
 
@@ -98,6 +102,9 @@ class MainActivity : Activity() {
         val accessibilityButton = actionButton("Activar accesibilidad") {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
+        val filesButton = actionButton("Permiso archivos") {
+            openFileAccessSettings()
+        }
         val quickCommands = quickCommandPanel()
 
         val actions = LinearLayout(this).apply {
@@ -122,6 +129,7 @@ class MainActivity : Activity() {
         root.addView(commandInput, fullWidthParams())
         root.addView(actions, fullWidthParams())
         root.addView(accessibilityButton, fullWidthParams())
+        root.addView(filesButton, fullWidthParams())
         root.addView(quickCommands, fullWidthParams())
         root.addView(logScroll, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = 18 })
         return root
@@ -138,6 +146,7 @@ class MainActivity : Activity() {
         panel.addView(commandRow("Bajar", "baja pantalla", "Subir", "sube pantalla"))
         panel.addView(commandRow("Vol +", "sube volumen", "Vol -", "baja volumen"))
         panel.addView(commandRow("Brillo +", "sube brillo", "Brillo -", "baja brillo"))
+        panel.addView(commandRow("Carpeta prueba", "crea una carpeta llamada prueba", "Archivo nota", "crea un archivo llamado nota.txt"))
 
         return panel
     }
@@ -237,13 +246,20 @@ class MainActivity : Activity() {
         appendLog("> $command")
         memory.rememberCommand(command)
 
+        if (resumePendingFileRequest(command)) {
+            return
+        }
+
         when (val intent = parser.parse(command)) {
             is CommandIntent.OpenApp -> openApp(intent.appName, intent.packageName)
             is CommandIntent.TapText -> tapText(intent.label)
+            is CommandIntent.CreateFolder -> createFolder(intent.name, intent.locationQuery)
+            is CommandIntent.CreateFile -> createFile(intent.name, intent.locationQuery)
             CommandIntent.OpenAccessibilitySettings -> {
                 appendLog("Abriendo ajustes de accesibilidad.")
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             }
+            CommandIntent.OpenFileAccessSettings -> openFileAccessSettings()
             CommandIntent.Back -> runAccessibilityAction("Volviendo atras.") { it.goBack() }
             CommandIntent.Home -> runAccessibilityAction("Yendo a inicio.") { it.goHome() }
             CommandIntent.Recents -> runAccessibilityAction("Abriendo apps recientes.") { it.openRecents() }
@@ -316,12 +332,177 @@ class MainActivity : Activity() {
         appendLog(if (delta > 0) "Subiendo brillo." else "Bajando brillo.")
     }
 
+    private fun createFolder(name: String?, locationQuery: String?) {
+        if (name.isNullOrBlank()) {
+            pendingFileRequest = PendingFileRequest(FileKind.Folder, locationQuery)
+            appendLog("Que nombre quieres para la carpeta?")
+            return
+        }
+
+        if (!ensureFileAccess()) {
+            return
+        }
+
+        val parent = resolveDirectory(locationQuery) ?: return
+        val folder = File(parent, sanitizeName(name))
+        if (folder.exists()) {
+            appendLog("La carpeta ya existe: ${folder.absolutePath}")
+            return
+        }
+
+        if (folder.mkdirs()) {
+            appendLog("Carpeta creada: ${folder.absolutePath}")
+        } else {
+            appendLog("No pude crear la carpeta: ${folder.absolutePath}")
+        }
+    }
+
+    private fun createFile(name: String?, locationQuery: String?) {
+        if (name.isNullOrBlank()) {
+            pendingFileRequest = PendingFileRequest(FileKind.File, locationQuery)
+            appendLog("Que nombre quieres para el archivo?")
+            return
+        }
+
+        if (!ensureFileAccess()) {
+            return
+        }
+
+        val parent = resolveDirectory(locationQuery) ?: return
+        if (!parent.exists() && !parent.mkdirs()) {
+            appendLog("No pude crear la carpeta destino: ${parent.absolutePath}")
+            return
+        }
+
+        val file = File(parent, sanitizeName(name))
+        if (file.exists()) {
+            appendLog("El archivo ya existe: ${file.absolutePath}")
+            return
+        }
+
+        if (file.createNewFile()) {
+            appendLog("Archivo creado: ${file.absolutePath}")
+        } else {
+            appendLog("No pude crear el archivo: ${file.absolutePath}")
+        }
+    }
+
+    private fun resumePendingFileRequest(command: String): Boolean {
+        val pending = pendingFileRequest ?: return false
+        val name = command.trim().trim('"', '\'', '.', ',')
+        if (name.isBlank()) {
+            appendLog("Necesito un nombre valido.")
+            return true
+        }
+
+        pendingFileRequest = null
+        when (pending.kind) {
+            FileKind.Folder -> createFolder(name, pending.locationQuery)
+            FileKind.File -> createFile(name, pending.locationQuery)
+        }
+        return true
+    }
+
+    private fun ensureFileAccess(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            appendLog("Para crear libremente en /storage/emulated/0 necesito permiso de todos los archivos.")
+            openFileAccessSettings()
+            return false
+        }
+        return true
+    }
+
+    private fun openFileAccessSettings() {
+        appendLog("Abriendo permiso de todos los archivos.")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            runCatching { startActivity(intent) }
+                .onFailure { startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
+        } else {
+            appendLog("Este Android no requiere el permiso especial de todos los archivos.")
+        }
+    }
+
+    private fun resolveDirectory(locationQuery: String?): File? {
+        val root = Environment.getExternalStorageDirectory()
+        val query = locationQuery?.trim()?.lowercase().orEmpty()
+        if (query.isBlank() || query == "raiz" || query == "la raiz" || query == "root") {
+            return root
+        }
+
+        val direct = when (query) {
+            "documentos", "documents" -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+            "descargas", "download", "downloads" -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            "imagenes", "fotos", "pictures" -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+            "musica", "music" -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+            else -> null
+        }
+        if (direct != null) {
+            return direct
+        }
+
+        val found = findDirectory(root, query, maxDepth = 4)
+        if (found != null) {
+            return found
+        }
+
+        val fallback = File(root, sanitizeName(locationQuery ?: query))
+        appendLog("No encontre \"$locationQuery\". Usare/creare: ${fallback.absolutePath}")
+        return fallback
+    }
+
+    private fun findDirectory(start: File, query: String, maxDepth: Int): File? {
+        if (maxDepth < 0 || !start.isDirectory) {
+            return null
+        }
+
+        if (start.name.lowercase() == query) {
+            return start
+        }
+
+        val children = start.listFiles()?.filter { it.isDirectory }.orEmpty()
+        children.firstOrNull { it.name.lowercase() == query }?.let { return it }
+
+        for (child in children.take(80)) {
+            val found = findDirectory(child, query, maxDepth - 1)
+            if (found != null) {
+                return found
+            }
+        }
+
+        return null
+    }
+
+    private fun sanitizeName(name: String): String {
+        return name
+            .trim()
+            .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            .ifBlank { "sin_nombre" }
+    }
+
     private fun updateStatus() {
         val accessibility = if (JarvisAccessibilityService.active) "activa" else "pendiente"
-        statusText.text = "Accesibilidad: $accessibility | Voz: manual | Fase 1"
+        val files = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()) {
+            "libres"
+        } else {
+            "pendiente"
+        }
+        statusText.text = "Accesibilidad: $accessibility | Archivos: $files | Fase 1"
     }
 
     private fun appendLog(message: String) {
         logText.append("$message\n")
+    }
+
+    private data class PendingFileRequest(
+        val kind: FileKind,
+        val locationQuery: String?,
+    )
+
+    private enum class FileKind {
+        Folder,
+        File,
     }
 }
