@@ -2,9 +2,12 @@ package com.samuelcba.jarvismobile
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -39,6 +42,7 @@ class MainActivity : Activity() {
         setContentView(buildContentView())
         updateStatus()
         appendLog("Sistema listo. Prueba: \"abre YouTube\", \"abre Chrome\" o \"abre ajustes\".")
+        appendLog("Tambien puedes usar: atras, inicio, baja pantalla, sube volumen, sube brillo, toca buscar.")
         memory.recentCommands().forEach { appendLog("Memoria: $it") }
     }
 
@@ -94,6 +98,7 @@ class MainActivity : Activity() {
         val accessibilityButton = actionButton("Activar accesibilidad") {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
+        val quickCommands = quickCommandPanel()
 
         val actions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -117,8 +122,32 @@ class MainActivity : Activity() {
         root.addView(commandInput, fullWidthParams())
         root.addView(actions, fullWidthParams())
         root.addView(accessibilityButton, fullWidthParams())
+        root.addView(quickCommands, fullWidthParams())
         root.addView(logScroll, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = 18 })
         return root
+    }
+
+    private fun quickCommandPanel(): LinearLayout {
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        panel.addView(commandRow("WhatsApp", "abre WhatsApp", "YouTube", "abre YouTube"))
+        panel.addView(commandRow("Chrome", "abre Chrome", "Ajustes", "abre ajustes"))
+        panel.addView(commandRow("Atras", "atras", "Inicio", "inicio"))
+        panel.addView(commandRow("Bajar", "baja pantalla", "Subir", "sube pantalla"))
+        panel.addView(commandRow("Vol +", "sube volumen", "Vol -", "baja volumen"))
+        panel.addView(commandRow("Brillo +", "sube brillo", "Brillo -", "baja brillo"))
+
+        return panel
+    }
+
+    private fun commandRow(leftLabel: String, leftCommand: String, rightLabel: String, rightCommand: String): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(actionButton(leftLabel) { executeCommand(leftCommand) }, weightedButtonParams())
+            addView(actionButton(rightLabel) { executeCommand(rightCommand) }, weightedButtonParams())
+        }
     }
 
     private fun actionButton(text: String, onClick: () -> Unit): Button {
@@ -210,10 +239,20 @@ class MainActivity : Activity() {
 
         when (val intent = parser.parse(command)) {
             is CommandIntent.OpenApp -> openApp(intent.appName, intent.packageName)
+            is CommandIntent.TapText -> tapText(intent.label)
             CommandIntent.OpenAccessibilitySettings -> {
                 appendLog("Abriendo ajustes de accesibilidad.")
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             }
+            CommandIntent.Back -> runAccessibilityAction("Volviendo atras.") { it.goBack() }
+            CommandIntent.Home -> runAccessibilityAction("Yendo a inicio.") { it.goHome() }
+            CommandIntent.Recents -> runAccessibilityAction("Abriendo apps recientes.") { it.openRecents() }
+            CommandIntent.ScrollDown -> runAccessibilityAction("Bajando pantalla.") { it.scrollForward() }
+            CommandIntent.ScrollUp -> runAccessibilityAction("Subiendo pantalla.") { it.scrollBackward() }
+            CommandIntent.VolumeUp -> changeVolume(AudioManager.ADJUST_RAISE)
+            CommandIntent.VolumeDown -> changeVolume(AudioManager.ADJUST_LOWER)
+            CommandIntent.BrightnessUp -> changeBrightness(32)
+            CommandIntent.BrightnessDown -> changeBrightness(-32)
             CommandIntent.Unknown -> {
                 appendLog("No tengo ese comando todavia. MVP siguiente: modo entrenamiento para guardarlo como rutina.")
             }
@@ -231,9 +270,55 @@ class MainActivity : Activity() {
         startActivity(launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
+    private fun tapText(label: String) {
+        runAccessibilityAction("Tocando elemento con texto: $label") {
+            it.clickByText(label)
+        }
+    }
+
+    private fun runAccessibilityAction(startMessage: String, action: (JarvisAccessibilityService) -> Boolean) {
+        val service = JarvisAccessibilityService.current()
+        if (service == null) {
+            appendLog("Activa accesibilidad para usar este comando.")
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            return
+        }
+
+        appendLog(startMessage)
+        if (!action(service)) {
+            appendLog("No pude completar la accion en la pantalla actual.")
+        }
+    }
+
+    private fun changeVolume(direction: Int) {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI)
+        appendLog(if (direction > 0) "Subiendo volumen." else "Bajando volumen.")
+    }
+
+    private fun changeBrightness(delta: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.System.canWrite(this)) {
+            appendLog("Android pide permiso especial para cambiar brillo. Abriendo permiso.")
+            val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            startActivity(intent)
+            return
+        }
+
+        val current = Settings.System.getInt(
+            contentResolver,
+            Settings.System.SCREEN_BRIGHTNESS,
+            125,
+        )
+        val next = (current + delta).coerceIn(10, 255)
+        Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, next)
+        appendLog(if (delta > 0) "Subiendo brillo." else "Bajando brillo.")
+    }
+
     private fun updateStatus() {
         val accessibility = if (JarvisAccessibilityService.active) "activa" else "pendiente"
-        statusText.text = "Accesibilidad: $accessibility | Voz: manual | MVP Kotlin"
+        statusText.text = "Accesibilidad: $accessibility | Voz: manual | Fase 1"
     }
 
     private fun appendLog(message: String) {
